@@ -1,0 +1,32 @@
+﻿#ifndef PATH_TRACING_BRDF_PHONG
+#define PATH_TRACING_BRDF_PHONG
+
+#include "Assets/Shaders/PathTracing/Structures.compute"
+
+float SmoothnessToPhongAlpha(float s)
+{
+	return pow(100000.0f, s * s);
+}
+
+float3 PhongBRDF(Material material, float3 view, float3 reflected, float alpha)
+{
+	float3 albedo = min(1.0f - material.specular, material.albedo);
+	float3 diffuse = 2 * min(1.0f - material.specular, material.albedo);
+	float3 specular = material.specular * (alpha + 2) * pow(max(0.0f, dot(view, reflected)), alpha);
+
+	return diffuse + specular;
+}
+
+float3 PhongBRDF_Specular(Material material, float probability)
+{
+	return (1.0f / probability) * material.specular;
+}
+
+float3 PhongBRDF_Diffuse(Material material, float probability)
+{
+	return (1.0f / probability) * 2 * material.albedo;
+}
+
+
+
+#endif // PATH_TRACING_BRDF_PHONG

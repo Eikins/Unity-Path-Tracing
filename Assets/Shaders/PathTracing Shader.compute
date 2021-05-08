@@ -1,0 +1,209 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel PathTrace
+
+#pragma multi_compile_local __ USE_IMPORTANCE_SAMPLING
+#pragma multi_compile_local __ USE_BLUE_NOISE
+#pragma multi_compile_local __ COMPUTE_ERROR
+
+#define INFINITY 1000000
+
+#include "Assets/Shaders/PathTracing/Constants.compute"
+#include "Assets/Shaders/PathTracing/Structures.compute"
+
+RWTexture2D<float4> Result;
+
+StructuredBuffer<Plane> _Planes;
+StructuredBuffer<Sphere> _Spheres;
+StructuredBuffer<float3> _Vertices;
+StructuredBuffer<uint> _Indices;
+StructuredBuffer<Mesh> _Meshes;
+StructuredBuffer<Material> _Materials;
+
+#if COMPUTE_ERROR
+Texture2D<float3> _ReferenceImage;
+SamplerState sampler_ReferenceImage;
+RWStructuredBuffer<float> _SquaredDifferences;
+#endif
+
+float2 _Pixel;
+float2 _PixelOffset;
+
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+
+float4 _DirectionalLight;
+Texture2D<float4> _SkyboxTexture;
+SamplerState sampler_SkyboxTexture;
+
+#include "Assets/Shaders/PathTracing/Random.compute"
+#include "Assets/Shaders/PathTracing/RayIntersections.compute"
+#include "Assets/Shaders/PathTracing/BRDF/Phong.compute"
+
+Ray CreateCameraRay(float2 cPos)
+{
+	float3 origin = _CameraToWorld._m03_m13_m23;
+
+	float3 direction = mul(_CameraInverseProjection, float4(cPos, 0.0f, 1.0f)).xyz;
+	direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
+	direction = normalize(direction);
+
+	return CreateRay(origin, direction);
+}
+
+float3x3 GetTangentSpace(float3 normal)
+{
+	// Choose a helper vector for the cross product, and ensure non-colinearity
+	float3 helper = float3(1, 0, 0);
+	if (abs(normal.x) > 0.99f)
+	{
+		helper = float3(0, 0, 1);
+	}
+
+	// Generate the basis
+	float3 tangent = normalize(cross(normal, helper));
+	float3 binormal = normalize(cross(normal, tangent));
+	return float3x3(tangent, binormal, normal);
+}
+
+RayHit Trace(Ray ray)
+{
+	RayHit hitResult = CreateRayHit();
+	uint numPlanes, planeStride;
+	uint numSpheres, sphereStride;
+	uint numMesh, meshStride;
+	uint i = 0;
+
+	_Planes.GetDimensions(numPlanes, planeStride);
+	_Spheres.GetDimensions(numSpheres, sphereStride);
+	_Meshes.GetDimensions(numMesh, meshStride);
+
+	// Intersect Planes
+	for (i = 0; i < numPlanes; i++)
+	{
+		IntersectPlane(_Planes[i], ray, hitResult);
+	}
+
+	// Intersect Spheres
+	for (i = 0; i < numSpheres; i++)
+	{
+		IntersectSphere(_Spheres[i], ray, hitResult);
+	}
+
+	// Intersect Meshes
+	for (i = 0; i < numMesh; i++)
+	{
+		IntersectMesh(_Meshes[i], ray, hitResult);
+	}
+
+	return hitResult;
+}
+
+float3 Shade(inout Ray ray, RayHit hit)
+{
+	if (hit.distance < INFINITY)
+	{
+		ray.origin = hit.position + hit.normal * 0.001f;
+		Material material = _Materials[hit.materialIndex];
+
+#if USE_IMPORTANCE_SAMPLING
+		// === PHON WITH IMPORTANCE SAMPLING ====
+		// We choose randomly between specular and albedo based on probabilities
+
+		float3 albedo = min(1.0f - material.specular, material.albedo);
+		float specProbability = dot(material.specular, 1.0f / 3.0f);
+		float diffProbability = dot(albedo, 1.0f / 3.0f);
+
+		specProbability /= specProbability + diffProbability;
+		diffProbability = 1.0f - specProbability;
+
+
+#if USE_BLUE_NOISE
+		float random = BlueRandom().x;
+#else
+		float random = Random();
+#endif
+		// When using blue noise, as the texture is savec on 8bt, we have 0s and 1s, so we need to secure the check
+		if (random > 0 && random == specProbability || random < specProbability)
+		{
+			// Reflect the ray in the case of specular reflection
+			float3 reflected = reflect(ray.direction, hit.normal);
+			float alpha = SmoothnessToPhongAlpha(material.smoothness);
+			// Sample a random direction around the reflected ray
+			ray.direction = RandomHemisphereCosine(alpha);
+			ray.direction = mul(ray.direction, GetTangentSpace(reflected));
+			float factor = (alpha + 2) / (alpha + 1);
+			ray.energy *= PhongBRDF_Specular(material, specProbability) * saturate(dot(hit.normal, ray.direction) * factor);
+		}
+		else
+		{
+			// Sample a random direction, with a cosine factor (wich correspond to the integral cosine factor)
+			ray.direction = RandomHemisphereCosine(1.0f);
+			// GetTangeantSpace return a row-major matrix, wich is the transpose of the transform matrix
+			ray.direction = mul(ray.direction, GetTangentSpace(hit.normal));
+			ray.energy *= PhongBRDF_Diffuse(material, diffProbability) * max(0.0f, dot(hit.normal, ray.direction));
+		}
+#else
+		// === PHON WITHOUT IMPORTANCE SAMPLING ====
+		float3 reflected = reflect(ray.direction, hit.normal);
+		float alpha = SmoothnessToPhongAlpha(material.smoothness);
+
+
+		ray.direction = RandomHemisphereUniform();
+		ray.direction = mul(ray.direction, GetTangentSpace(hit.normal));
+
+		ray.energy *= PhongBRDF(material, ray.direction, reflected, alpha) * max(0.0f, dot(hit.normal, ray.direction));
+#endif
+
+		return material.emission;
+	}
+	else
+	{
+		// Erase the ray's energy - the sky doesn't reflect anything
+		ray.energy = 0.0f;
+		// Sample the skybox and write it
+		// We sample the same way unity samples to have corresponding scene view and rendered view
+		// https://github.com/TwoTailsGames/Unity-Built-in-Shaders/blob/master/DefaultResourcesExtra/Skybox-Panoramic.shader
+		float theta = 1.0f - acos(ray.direction.y) / PI;
+		float phi = 0.5f - 0.5f * atan2(ray.direction.z, ray.direction.x) / PI;
+		return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
+	}
+}
+
+[numthreads(8,8,1)]
+void PathTrace(uint3 id : SV_DispatchThreadID)
+{
+	// Get the dimensions of the RenderTexture
+	uint width, height;
+	Result.GetDimensions(width, height);
+	float2 screenSize = float2(width, height);
+	_Pixel = id.xy;
+
+	InitRandom(id.xy, screenSize);
+
+	// Get clipped position (Screen Space -> Clip Space)
+	// Clip positions are in [-1, 1]²
+	float2 cPos = float2((_Pixel + _PixelOffset) / screenSize * 2.0f - 1.0f);
+	Ray ray = CreateCameraRay(cPos);
+
+	// Trace and shade
+	float3 result = float3(0, 0, 0);
+	for (int i = 0; i < 8; i++)
+	{
+		RayHit hit = Trace(ray);
+		result += ray.energy * Shade(ray, hit);
+
+		if (!any(ray.energy))
+		{
+			break;
+		}
+	}
+
+	Result[_Pixel] = float4(result, 1);
+
+#if COMPUTE_ERROR
+	uint3 refColor = uint3(_ReferenceImage.SampleLevel(sampler_ReferenceImage, _Pixel / screenSize, 0).rgb * 255.0f);
+	uint3 rgbResult = uint3(saturate(result) * 255.0f);
+	float diff = (float(refColor.r) - float(rgbResult.r)) / 255.0f;
+	_SquaredDifferences[width * id.y + id.x] = diff * diff;
+#endif
+}

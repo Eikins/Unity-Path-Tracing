@@ -1,0 +1,24 @@
+﻿#pragma kernel ComputeDifferences
+
+Texture2D<float3> _FirstImage;
+SamplerState sampler_FirstImage;
+Texture2D<float3> _SecondImage;
+SamplerState sampler_SecondImage;
+
+RWStructuredBuffer<float> _Result;
+
+[numthreads(8,8,1)]
+void ComputeDifferences(uint3 id : SV_DispatchThreadID)
+{
+	// Get the dimensions of the textures
+	uint width, height;
+	_FirstImage.GetDimensions(width, height);
+	float2 screenSize = float2(width, height);
+
+	float3 color1 = _FirstImage.SampleLevel(sampler_FirstImage, id.xy / screenSize, 0).rgb;
+	float3 color2 = _SecondImage.SampleLevel(sampler_SecondImage, id.xy / screenSize, 0).rgb;
+
+	float diff = dot(color1 - color2, 1.0f / 3.0f);
+
+	_Result[width * id.y + id.x] = abs(diff);
+}

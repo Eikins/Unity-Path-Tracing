@@ -1,0 +1,70 @@
+﻿#ifndef PATH_TRACING_STRUCTURES
+#define PATH_TRACING_STRUCTURES
+
+// ==== Object Structures ====
+struct Plane
+{
+	float3 normal;
+	float offset;
+	uint materialIndex;
+};
+
+struct Sphere
+{
+	float3 center;
+	float radius;
+	uint materialIndex;
+};
+
+struct Mesh
+{
+	float4x4 localToWorld;
+	uint indicesOffset;
+	uint indicesCount;
+	uint materialIndex;
+};
+
+struct Material
+{
+	float3 albedo;
+	float3 specular;
+	float3 emission;
+	float smoothness;
+};
+
+struct Ray
+{
+	float3 origin;
+	float3 direction;
+	float3 energy;
+};
+
+struct RayHit
+{
+	float3 position;
+	float distance;
+	float3 normal;
+	uint materialIndex;
+};
+
+// ==== Constructors ====
+Ray CreateRay(float3 origin, float3 direction)
+{
+	Ray ray;
+	ray.origin = origin;
+	ray.direction = direction;
+	ray.energy = float3(1.0f, 1.0f, 1.0f);
+	return ray;
+}
+
+RayHit CreateRayHit()
+{
+	RayHit hit;
+	hit.position = float3(0.0f, 0.0f, 0.0f);
+	hit.distance = INFINITY;
+	hit.normal = float3(0.0f, 0.0f, 0.0f);
+	hit.materialIndex = 0;
+	return hit;
+}
+
+#endif // PATH_TRACING_STRUCTURES

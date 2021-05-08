@@ -1,0 +1,8 @@
+﻿#ifndef PATH_TRACING_CONSTANTS
+#define PATH_TRACING_CONSTANTS
+
+// Math Constants
+static const float PI = 3.14159265f;
+static const float EPSILON = 1e-8;
+
+#endif // PATH_TRACING_CONSTANTS

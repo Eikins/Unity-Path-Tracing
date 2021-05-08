@@ -1,0 +1,81 @@
+﻿#ifndef PATH_TRACING_RANDOM
+#define PATH_TRACING_RANDOM
+
+// Uniforms
+float _Seed;
+float2 _PixelSeed;
+float3 _SharedSeed;
+
+
+#if USE_BLUE_NOISE
+Texture2D<float2> _BlueNoiseTexture;
+SamplerState sampler_BlueNoiseTexture; 
+float2 _PixelNoiseUV;
+#endif
+
+void InitRandom(float2 pixelCoords, float2 screenSize)
+{
+#if USE_BLUE_NOISE
+	_PixelNoiseUV = pixelCoords / screenSize + _PixelOffset;
+#endif
+	_PixelSeed = pixelCoords;
+}
+
+float Random()
+{
+	float result = frac(sin(_Seed / 100.0f * dot(_PixelSeed, float2(12.9898f, 78.233f))) * 43758.5453f);
+	_Seed += 1.0f;
+	return result;
+}
+
+float SharedRandom()
+{
+	float result = frac(sin(_SharedSeed.x / 100.0f * dot(_SharedSeed.yz, float2(12.9898f, 78.233f))) * 43758.5453f);
+	_SharedSeed.x += 1.0f;
+	return result;
+}
+
+#if USE_BLUE_NOISE
+float2 BlueRandom()
+{
+	float2 samples = _BlueNoiseTexture.SampleLevel(sampler_BlueNoiseTexture, _PixelNoiseUV, 0).xy;
+	_PixelNoiseUV += float2(SharedRandom(), SharedRandom());
+	return samples;
+}
+#endif
+
+float3 RandomHemisphereUniform()
+{
+	// Uniformly sample a hemisphere direction
+	// https://cg.informatik.uni-freiburg.de/course_notes/graphics2_08_renderingEquation.pdf page 42
+
+#if USE_BLUE_NOISE
+	float2 samples = BlueRandom();
+#else
+	float2 samples = float2(Random(), Random());
+#endif
+	float phi = 2 * PI * samples.x;
+	float cosTheta = samples.y;
+	float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+
+	return float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+}
+
+float3 RandomHemisphereCosine(float alpha)
+{
+	// Same has above, but here we apply a cosine ratio
+	// https://cg.informatik.uni-freiburg.de/course_notes/graphics2_08_renderingEquation.pdf page 42
+
+#if USE_BLUE_NOISE
+	float2 samples = BlueRandom();
+#else
+	float2 samples = float2(Random(), Random());
+#endif
+	float phi = 2 * PI * samples.x;
+	float cosTheta = pow(samples.y, 1.0f / (alpha + 1.0f));
+	float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+
+	return float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+}
+
+#endif // PATH_TRACING_CONSTANTS

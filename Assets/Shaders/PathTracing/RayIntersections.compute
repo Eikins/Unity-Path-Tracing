@@ -1,0 +1,113 @@
+﻿#ifndef PATH_TRACING_RAY_INTERSECTIONS
+#define PATH_TRACING_RAY_INTERSECTIONS
+
+#include "Assets/Shaders/PathTracing/Constants.compute"
+#include "Assets/Shaders/PathTracing/Structures.compute"
+
+void IntersectPlane(Plane plane, Ray ray, inout RayHit hit) {
+	float t = -(plane.offset + dot(ray.origin, plane.normal)) / dot(ray.direction, plane.normal);
+
+	if (t > 0.0 && t < hit.distance) {
+		hit.distance = t;
+		hit.position = ray.origin + t * ray.direction;
+		hit.normal = plane.normal;
+		hit.materialIndex = plane.materialIndex;
+	}
+}
+
+void IntersectSphere(Sphere sphere, Ray ray, inout RayHit hit)
+{
+	// https://en.wikipedia.org/wiki/Line%E2%80%93sphere_intersection
+	float3 offset = sphere.center - ray.origin;
+	float p1 = dot(ray.direction, offset);
+	float p2sqr = p1 * p1 - dot(offset, offset) + sphere.radius * sphere.radius;
+
+	if (p2sqr < 0)
+	{
+		return;
+	}
+
+	float p2 = sqrt(p2sqr);
+	float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
+
+	if (t > 0 && t < hit.distance)
+	{
+		hit.distance = t;
+		hit.position = ray.origin + t * ray.direction;
+		hit.normal = normalize(hit.position - sphere.center);
+		hit.materialIndex = sphere.materialIndex;
+	}
+}
+
+void RaycastTriangle(float3 v0, float3 v1, float3 v2, Ray ray, inout float t)
+{
+	float3 v0v1 = v1 - v0;
+	float3 v0v2 = v2 - v0;
+
+	float3 pvec = cross(ray.direction, v0v2);
+	float det = dot(v0v1, pvec);
+
+	// Backface culling
+	if (det < EPSILON)
+	{
+		return;
+	}
+
+	float inv_det = 1.0f / det;
+	float3 tvec = ray.origin - v0;
+	float u = inv_det * dot(tvec, pvec);
+	if (u < 0.0 || u > 1.0f)
+	{
+		t = -1.0f;
+		return;
+	}
+
+
+	float3 qvec = cross(tvec, v0v1);
+	float v = dot(ray.direction, qvec) * inv_det;
+	if (v < 0.0 || u + v > 1.0f)
+	{
+		t = -1.0f;
+		return;
+	}
+
+	t = dot(v0v2, qvec) * inv_det;
+}
+
+void IntersectTriangle(float3 v0, float3 v1, float3 v2, Ray ray, inout RayHit hit)
+{
+	float t;
+	RaycastTriangle(v0, v1, v2, ray, t);
+	if (t > 0 && t < hit.distance)
+	{
+		hit.distance = t;
+		hit.position = ray.origin + t * ray.direction;
+		hit.normal = normalize(cross(v1 - v0, v2 - v0));
+		hit.materialIndex = 0;
+	}
+}
+
+void IntersectMesh(Mesh mesh, Ray ray, inout RayHit hit)
+{
+	uint start = mesh.indicesOffset;
+	uint end = start + mesh.indicesCount;
+
+	for (uint i = start; i < end; i += 3)
+	{
+		float3 v0 = mul(mesh.localToWorld, float4(_Vertices[_Indices[i + 0]], 1.0f)).xyz;
+		float3 v1 = mul(mesh.localToWorld, float4(_Vertices[_Indices[i + 1]], 1.0f)).xyz;
+		float3 v2 = mul(mesh.localToWorld, float4(_Vertices[_Indices[i + 2]], 1.0f)).xyz;
+
+		float t;
+		RaycastTriangle(v0, v1, v2, ray, t);
+		if (t > 0 && t < hit.distance)
+		{
+			hit.distance = t;
+			hit.position = ray.origin + t * ray.direction;
+			hit.normal = normalize(cross(v1 - v0, v2 - v0));
+			hit.materialIndex = mesh.materialIndex;
+		}
+	}
+}
+
+#endif // PATH_TRACING_RAY_INTERSECTIONS
